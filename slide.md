@@ -1,5 +1,7 @@
 ---
 marp: true
+title: Quantization: Fundamentals, QAT and More.
+author: Pingzhi (Stanley) Tang
 theme: gaia
 paginate: true
 headingDivider: 3
@@ -27,18 +29,17 @@ img {
 
 <!-- _class: lead -->
 # <!-- fit --><span class="morph" style="--morph-name:quant;">Quantization</span>
-#### Fundamentals, QAT and more.
+#### Fundamentals, QAT and More.
 
 > Quantization is set of techniques to reduce the precision, make the model smaller and training faster in deep learning models. 
 
-Pingzhi Tang
+[Pingzhi (Stanley) Tang](pingzhitang.cv)
 stanleytang@stu.pku.edu.cn
 <!-- footer: Huggingface [blog](https://huggingface.co/blog/merve/quantization) -->
 
 <!-- 
 这里引用了 huggingface 上一篇 blog 对量化的定义
-上个学期 qb 讲过一次量化，但是上次主要关注的是 PTQ 也就是 post-training quantization
-这种量化方法的好处是对算力要求比较少，但是效果有上限，当 bitwidth 非常小的时候效果一般
+简单来说量化就是把高精度的weight或者activation用低精度保存（或者计算），用来减少显存和计算上的开销
 今天我们先简单的过一下量化的背景知识，然后就重点讲一下 qat 以及一些相关的文章，文章跨度从 20年到上个月都有
 -->
 
@@ -64,9 +65,12 @@ li {
 }
 </style>
 - <span class="morph" style="--morph-name:quant-fund;"><span class="morph" style="--morph-name:quant;">Quantization</span> Fundamentals</span>
+    - Classed of quantization: based on targets
+    - Quantizer design
+    - Quanization granularity
+    - Modeling simulated quantization in the backward pass
 - Determining Quantizer Parameters
 - Quantization-Aware Training (QAT)
-- Evaluating Quantized LLMs
 <!-- footer: \b -->
 
 # <span class="morph" style="--morph-name:quant-fund;"><span class="morph" style="--morph-name:quant;">Quantization</span> Fundamentals</span>
@@ -144,27 +148,6 @@ Compared to the FP KV cache, the quantized one occupies less storage in device m
 
 ### KV Cache <span class="morph" style="--morph-name:quant;">Quantization</span>
 - Similar to weight-only algorithms, the quantized key-value pairs usually need to be dequantized to floating-point before MatMul, otherwise, the **specific system support** of multiplying low-bit to floating-point is required.
-* Details omitted, since the similar topic was discussed last week.
-
-### Bonus: <span class="morph" style="--morph-name:quant;">Quantization</span> During Training
-Used in training, e.g. DeepSeek-V3
-![w:1000](images/7319ad6e491b9e0f80825728f78fbf9538d21cc893594a73ba046628a98f521e.png)  
-<!-- _footer: DeepSeek-AI et al., [[arxiv]](https://arxiv.org/abs/2412.19437) -->
-<!-- 
-上述说到的都是量化在推理的时候的好处, 现在额外讲一下训练的时候的好处,这里是 deepseek-v3在训练过程中用到的量化
-其实大概的思路也是一样的，就是通过这个 FP8 的乘法 kernel 加速训练，并减少计算量
-但是之前的 fp8 训练会被 outliers 限制，deepseek 这里使用了非常精细的量化粒度，然后设计了对应的非常高效的乘法运算核
-这样的细粒度量化也使得他们可以把所有的fp8 都是用 E5M2，因为一个 group 中的数据 scale 之后在大小上已经相差不大了
-他们还仔细的选择了到底量化哪些东西，比如在图上可以看到master weights, weight gradients, and optimizer states都是高精度的；他们还选择了the embedding module, the output head, MoE gating modules, normalization operators, and attention operators保持高精度
-While low-precision training holds great promise, it is often limited by the presence of outliers in activations, weights, and gradients. 
-a fine-grained quantization strategy: tile-wise grouping with 1 × N_c elements or block-wise grouping with N_c × N_c elements.The associated dequantization overhead is largely mitigated under our increased-precision accumulation process, a critical aspect for achieving accurate FP8 General Matrix Multiplication (GEMM). 
-cache and dispatch activations in FP8, while storing low-precision optimizer states in BF16.
-most compute-density operations are conducted in FP8, These GEMM operations accept FP8 tensors as inputs and produce outputs in BF16 or FP32
-certain operators still require a higher precision due to their sensitivity to low-precision computations. Besides, some low-cost operators can also utilize a higher precision with a negligible overhead to the overall training cost.
-    for stable training dynamics: the embedding module, the output head, MoE gating modules, normalization operators, and attention operators.
-    guarantee numerical stability: master weights, weight gradients, and optimizer states
-In contrast to the hybrid FP8 format adopted by prior work, which uses E4M3 (4-bit exponent and 3-bit mantissa) in Fprop and E5M2 (5-bit exponent and 2-bit mantissa) in Dgrad and Wgrad, we adopt the E4M3 format on all tensors for higher precision. We attribute the feasibility of this approach to our fine-grained quantization strategy, i.e., tile and block-wise scaling. By operating on smaller element groups, our methodology effectively shares exponent bits among these grouped elements, mitigating the impact of the limited dynamic range.
--->
 
 ## <span class="morph" style="--morph-name:quantizer;">Quantizer</span> Design
 - Uniform quantizer
@@ -222,37 +205,6 @@ scale量化和 affine 量化的区别, 很明显就是开销上, 无论是显存
 
 这里我们也埋了一个小小的伏笔，虽然我们这里写了把 -2^{b-1} 舍去了，这个对 bitwidth 比较大的情况确实是有好处的，但是对于 bitwidth 很小的时候显然是不能这么做的（比如 2bit）
 所以上个月 meta 发了一个文章也对这个问题做了一点讨论，我们之后也会提到
--->
-
-### Bonus: Stochastic <span class="morph" style="--morph-name:quantizer;">Quantizer</span>
-Stochastic quantization models the quantizer as an additive noise, followed by rounding. The stochastic quantizer is given by:
-$$ x_q = \clip(\text{round}(s \cdot x + z + \varepsilon), -2^{b - 1}, 2^{b - 1} - 1), $$
-$$ \varepsilon \sim \text{Uniform}(-0.5, 0.5) $$
-- <span class="morph" style="--morph-name:stochastic;">In expectation, the stochastic quantizer reduces to a **pass-through of the floating point weight, with saturation for values outside the range**. </span>
-- Most inference hardware does not support it :(.
-<!-- _footer: Krishnamoorthi et al., [[arxiv]](https://arxiv.org/abs/1806.08342) -->
-<!-- 
-这个随机量化的思想很有趣, 实际上也是之后会提到的 ste 的思想.
-量化操作相当于引入一个随机的误差, 这个误差可以建模为一个加性的误差
-在下面一页我们可以看到, 这个随机量化在期望上就相当于 x 直通
-这个性质非常好, 因为一方面他保证了量化在期望上是没有损失的; 另一方面使得通过round 函数之后的反向传播变得非常合理
-但是这个方法并没有被主流推理系统实现, 可能是因为取随机数这个操作是很慢的.
--->
-
-### Bonus: Stochastic <span class="morph" style="--morph-name:quantizer;">Quantizer
-- <span class="morph" style="--morph-name:stochastic;">In expectation, the stochastic quantizer reduces to a **pass-through of the floating point weight, with saturation for values outside the range**. </span>
-- Assume $x$ in range $[a, a + 1]$, where $a \in \Z$. We have:
-$$
-\begin{align} 
-\E(\round(x + \varepsilon)) &= a \cdot \Pr(\round(x + \varepsilon) = a) \\
-&+ (a + 1) \cdot \Pr(\round(x + \varepsilon) = a + 1) \\
-&= a \cdot (a + \frac{1}{2} - x + \frac{1}{2}) + (a + 1) \cdot (\frac{1}{2} - a - \frac{1}{2} + x) \\
-&= x
-\end{align}
-$$
-<!-- _footer: Krishnamoorthi et al., [[arxiv]](https://arxiv.org/abs/1806.08342) -->
-<!-- 
-这里简单推导了一下, 就是和两边整数的距离
 -->
 
 ### Nonuniform <span class="morph" style="--morph-name:quantizer;">Quantizer</span>
@@ -412,169 +364,6 @@ $$
 接下来我们来看看一种更加有趣的理解，这种理解可以给我们一些新的 insight。
 -->
 
-
-### <span class="morph" style="--morph-name:ste;">STE</span>: A Stochastic Interpretation
-Stochastic binarization & deterministic binarization
-- In stochastic binarization, real-valued variable $x^r$ is binarized to $-1/1$ stochastically according to its distance to $-1/1$:
-$$
-\begin{split}
-\widetilde{x}^{b} = \left\{
-             \begin{array}{lr}
-             \ \!-1,  \!\! & \text{with probability} \ \ p = {\clip}( \frac{1-x^r}{2}, 0, 1) \\
-             \quad\!1,  \!\! & \text{with probability} \ \ p = {\clip}( \frac{1+x^r}{2}, 0, 1)
-             \end{array}
-\right.
-\end{split}
-$$
-where $\widetilde{x}^b$ denotes the stochastic binary variables.
-<!-- footer: Liu et al., [[arxiv]](https://arxiv.org/abs/2111.14826) -->
-
-<!-- 
-注意我们用带 tilde 的表示随机二值，不带的表示确定二值
-
-随机二值和确定性二值函数是在二值神经网络里提出的概念, 我们用在这里有助于我们对 ste 的理解
-随机二值就是和我们之前推导 stochastic quantizer 里差不多
--->
-
-### STE: A Stochastic Interpretation
-- Expected gradient:
-$$
-\begin{align*}
-\frac{\partial x^b}{\partial x^r} &\approx \mathbb{E}_{\widetilde{x}^b}[\frac{\partial \widetilde{x}^b}{\partial x^r}] = \frac{\partial}{\partial x^r} \mathbb{E}[\widetilde{x}^b] \\
-& = \frac{\partial}{\partial x^r} (-1 \times p_{\{\widetilde{x}^b = -1\}} + 1 \times p_{\{\widetilde{x}^b = 1\}}) \\
-& = \frac{\partial}{\partial x^r} {\clip}(x^r,-1,1) \\
-\end{align*}
-$$
-* This arrives at the common straight-through estimator for the binarization functions.
-
-<!-- 
-我们考虑随机二值的梯度的期望  
-在这里我们得到了, 随机二值的ste
--->
-
-
-### STE: A Stochastic Interpretation
-- Meanwhile, deterministic binarization function in forward pass:
-$$
-\begin{split}
-x^b = \left\{  
-             \begin{array}{lr} 
-             \ -1, &   p_{\{\widetilde{x}^b = -1\}} > 0.5 \\
-             \quad \ \  1, &  p_{\{\widetilde{x}^b = -1\}} \leqslant 0.5 
-             \end{array}  
-\right.  = \left\{  
-             \begin{array}{lr}  
-             \  -1, & \!x^r < 0 \\ 
-             \quad \ \ 1, & \! x^r \geqslant 0  
-             \end{array}  
-\right.
-\end{split}
-$$
-* To this end, we show that STE encodes the expectation of stochastic binarization in the backward approximation to the forward deterministic binarization functions. 
-
-<!-- 
-为此，我们证明了 STE 在对前向确定性二值化函数进行后向逼近时，编码了随机二值化的期望。
-也就是说，STE 估计了这样一个没有梯度的确定性二值函数的反向过程。
-正向：确定性二值
-反向：随机二值
--->
-
-
-
-### Generalizing STE: G-STE
-**Lemma**: A quantization function $x^q$ can be regarded as a summation of deterministic binarization functions $x^{b_{\{0,1\}}}$ with different thresholds: $x^q = x^{b_{\{0,1\}}}_{1} + x^{b_{\{0,1\}}}_{2} + ... + x^{b_{\{0,1\}}}_{n}$.
-where 
-$$
-x^{b_{\{0,1\}}}_{i} = \left\{  
-            \begin{array}{lr} 
-            \quad 0, &   x^r < thre_i \\
-            \quad 1, &   x^r \ge thre_i
-            \end{array}  
-\right. 
-$$
-![bg right:40% w:550](images/95c4be77274a5eaf738c4fe8f7fd019eb87b3d0f2a8ab8c04d3111fd74412a63.png)  
-
-<!-- 
-前面说明了一个uniform 量化的反向传播，但是对于 non-uniform 量化，情况就没有这么简单了
-
-我们现在再来回头看一个 non-uniform 的量化函数，其实就是一个分段函数
-那么就可以理解为多个不同 threshold 的 0/1 二值函数的和
--->
-
-
-### Generalizing STE: G-STE
-<style scoped>
-p {
-   font-size: 0.9rem;
-}
-</style>
-Consider the first binarization, in the range of $[s, s+a_1]$:
-$$
-\begin{split}
-\widetilde{x}^{b_{\{0,1\}}}_{1} = \left\{  
-             \begin{array}{lr}
-             \!0 \ \ \ \text{with probability} \ p\!=\!{\clip}(\frac{s + a_1 - x^r}{a_1}, 0, 1) \\
-             \!1 \ \ \ \text{with probability} \ p\!=\!{\clip}( \frac{x^r-s}{a_1}, 0, 1)
-             \end{array}  
-\right. 
-\end{split}
-$$
-Similarly, we can derive the expected gradient: 
-$$
-\begin{align*}
-\frac{\partial x^{b_{\{0,1\}}}_{1}}{\partial x^r} &= \mathbb{E}[\frac{\partial \widetilde{x}^{b_{\{0,1\}}}_{1}}{\partial x^r}] =
-\frac{\partial}{\partial x^r} \mathbb{E}[\widetilde{x}^{b_{\{0,1\}}}_{1}]  \\&= \frac{\partial}{\partial x^r} (0 \times p_{\{\widetilde{x}^q = 0\}} + 1 \times p_{\{\widetilde{x}^q = 1\}}) = \frac{\partial {\clip}(\frac{x^r-s}{a_1}, 0, 1)}{\partial x^r}
-\end{align*}
-$$
-
-<!--
-前一页中的都是确定性的二值函数，现在开始考虑随机二值，对应着反向传播
-实数被随机地量化为$0/1$ with the probability proportional to their distance to $s/s+a_1$
--->
-
-### Generalizing STE: G-STE
-Therefore we have **G-STE**:
-$$
-\begin{align*}
-\frac{\partial x^q}{\partial x^r} &= \mathbb{E}[\frac{\partial \widetilde{x}^q}{\partial x^r}] = 
-\frac{\partial}{\partial x^r} \mathbb{E}[\widetilde{x}^q] =
-\sum_i \frac{\partial}{\partial x_r}\mathbb{E}[ \widetilde{x}_i^{b_{\{0,1\}}}] \\
-&= \sum_i \frac{\partial {\clip}(\frac{x^r-d_{i-1}}{a_i}, 0, 1)}{\partial x^r}
-= \left\{
-        \begin{array}{c}
-        \frac{1}{a_i} &  d_{i-1} \leqslant x^r < d_i \\
-        0 &  \text{otherwise}
-        \end{array}  
-\right.
-\end{align*}
-$$
-where $d_0 = s, \ \ d_i = s + \sum_{j=1}^{i} a_j, \ \ i\in\{1,...,2^n -1\}$
-
-<!-- 
-利用和刚刚的分析几乎一样的推导方式，我们可以得到整个定义域上的梯度
-这就是 G-STE
--->
-
-### Generalizing STE: G-STE
-Utilizing G-STE, we can even make the thresholds trainable(!).
-$$
-\begin{split}
-\frac{\partial x^q}{\partial a_i} &= \frac{\partial\mathbb{E}[\widetilde{x}^q]}{\partial a_i} = \sum_j \frac{\partial {\clip}(\frac{x^r-d_{j-1}}{a_j}, 0, 1)}{\partial a_i} \\
-&=
-\left\{  
-        \begin{array}{lr}
-        - \frac{x^r-d_{i-1}}{a_i^2} &  d_{i-1} \leqslant x^r < d_i \\
-        - \frac{1}{a_j}  & d_{j-1} \leqslant x^r < d_j, {j \ge i+1}\\
-        0 & otherwise \\
-        \end{array}  
-\right.
-\end{split}
-$$
-<!-- 
-这个式子的意义就在于：我们可以通过学习，得到模型non-uniform 量化的最佳量化 levels
-想象这样一个场景，我们在一个类似推理时的分布上学习量化参数，可以使得在真正推理的时候量化损失较小。
--->
-
 # <span class="morph" style="--morph-name:deter;">Determining Quantizer Parameters</span>
 <!-- _class: lead -->
 <!-- footer: Wu et al., [[arxiv](https://arxiv.org/abs/2004.09602)] -->
@@ -620,54 +409,6 @@ Note: These methods are almost always combined with QAT.
 <!-- 
 前面几种都是统计的方法，我这里其实比较想讲的是 learnable 的方法
 就是通过学习来学到对应的量化参数
--->
-
-### PACT: Parameterized Clipping Activation
-Consider a CNN with `ReLU` acted as the layer ActFn.
-- The output of the `ReLU` function is unbounded, therefore the quantization after `ReLU` requires a high dynamic range.
-- It has been shown that this dynamic range problem can be alleviated by using a clipping activation function, which places an upper-bound $\alpha$ on the output of `ReLU`.
-$$
-y = \text{PACT}(x) = \left\{\begin{matrix}
-0, & x\in(-\infty, 0) \\
-x, & x \in [0, \alpha) \\
-\alpha, & x \in [\alpha, +\infty)
-\end{matrix}\right.
-$$
-<!-- footer: Choi et al., [[arxiv]](https://arxiv.org/abs/1805.06085) -->
-
-<!-- 
-relu 的问题就是没有上界
-量化的时候需要确定一个上界，其实就是量化参数中的 s
-问题就到了怎么用学习的方法确定这个上界 alpha
--->
-
-### PACT: Parameterized Clipping Activation
-After quantization:
-$$
-y^q = \round(y \cdot \frac{2^k - 1}{\alpha})\cdot \frac{\alpha}{2^k-1}
-$$
-The corresponding gradient wrt. $\alpha$ (using **STE**):
-$$
-\frac{\partial y^q}{\partial\alpha} = \frac{\partial y^q}{\partial y} \cdot \frac{\partial y}{\partial\alpha} = \left\{\begin{matrix}
-0, & x\in(-\infty, \alpha) \\
-1, & x \in [\alpha, +\infty)
-\end{matrix}\right.
-$$
-<!-- 
-clip之后做量化，注意 relu 之后的激活值都是正的，所以我们量化也量化到一个无符号数
-可以用ste推导出梯度($\frac{\partial y^q}{\partial y} = 1$)
-这个时候我们就可以学习出这个 alpha，注意这里是一个 CNN，他是从头训，从头就考虑了量化误差
--->
-
-### PACT: Parameterized Clipping Activation
-To avoid large quantization errors due to a wide dynamic range, a L2-regularizer is introduced for $\alpha$ in the loss function.
-![w:1000](images/73a55f456b4b17efb0b3135ab8346d2dc9fe3ccb748f2f1af1517b0525113b60.png)  
-Become a common practice for CNN quantization!
-<!-- 
-这个图表示了从头训一个七层 CNN，调整一个 layer 的 alpha，其他的固定无穷大
-第一幅图表示除了第一层和最后一层，无穷大的上限是有利的，但是不同层的最小的最佳 alpha 不一样（需要学习）
-第二副图考虑了量化之后的结果，可以发现 alpha 较大的时候误差很大，因为量化的精度降低了
-第三幅图是加上了 l2 regular 的结果，可以发现局部最低点附近比较陡峭，比较好学习
 -->
 
 ### LSQ / LSQ+: Learned Step Size Quantization
@@ -791,68 +532,6 @@ img {
     margin: auto;
 }
 </style>
-![w:900](images/6cd6a9a1683bc94451f4de6c73ad4e835eab3f179f4362c2e09ef6b89c347962.png)  
-<!-- _footer: Wu et al., [[arxiv](https://arxiv.org/abs/2004.09602)] -->
-<!-- 
-显然还是很有用的
--->
-
-## <span class="morph" style="--morph-name:qat;">QAT</span> for <span class="morph" style="--morph-name:llm;">LLM</span>s
-Problems of QAT for LLMs:
-- LLM training is technically difficult and resource intensive. 
-- QAT needs training data, which for LLMs is difficult to obtain.
-* Here comes <span class="morph" style="--morph-name:llm-qat;">**LLM-QAT**</span> to tackle these problems.
-<!-- footer: Liu et al., [[arxiv]](https://arxiv.org/abs/2305.17888) -->
-
-<!-- 
-qat 方法是在 cnn 时代提出的，这个方法基本上已经成为 cnn 量化的标准方法，量化到 4bit 或者更低基本上可以没有任何性能损失
-但是在 llm 上，qat 有几个问题
-第一个就是 llm 本身的训练是多阶段多步的，而且需要很多显卡，所以也是因为这个原因，在 llm 上上次讲的 ptq 方法比较受关注
-第二个就是qat 的方法需要预训练数据集，这对大模型来说是不可得的
-所以就有了这篇把 qat 用在 llm 上的开山之作，实际上主要还是解决第二个问题
-by meta
--->
-
-## <span class="morph" style="--morph-name:llm-qat;">LLM-QAT</span>
-- Data-free Distillation
-    - Randomize the first token `<start>` from vocabulary and let the full-precision model to complete the sentence.
-    - Deterministically selects the top-1 predictions for the first 3~5 tokens and stochastically samples the remaining tokens.
-    - Use cross-entropy based logits distillation:
-    $$
-    \begin{align}
-        \mathcal{L}_{CE} = -\frac{1}{n}\sum_c\sum^n_{i=1} p_c^{\mathcal{T}}(X_i)\log(p_c^{\mathcal{S}}(X_i)),
-    \end{align}
-    $$
-
-<!-- 
-1. Furthermore, we discover that the initial few tokens play a crucial role in determining the prediction trend. Therefore, it is important for them to have higher confidence.
-2. in the data generation process, it is important to sample the next token
-from distribution rather than always selecting the top-1 candidate. By doing so, the next token does not necessarily represent the optimal label for training the student model, as the sampling introduces inherent noise. Consequently, we propose to utilize the predictions from the pre-trained model as soft labels.
--->
-
-## LLM-QAT
-- Data-free Distillation
-
-![w:1000](images/52c1b4c8b455cfb3e180995cc7fc1937b78a7b1cd31742108cc78a402810b7b1.png)  
-
-<!-- 
-从这里的 ablation study可以发现，直接用 wiki 或者 c4 训泛化性不好
-先确定性生成几个 token 再随机生成比较好
--->
-
-## LLM-QAT
-- QAT for key-value cache
-    - Per-token quantization for key & value
-    - During the generation process, the current key and value are quantized, and their corresponding scaling factor is stored.
-    - During the training process for QAT, we apply quantization to the entire activation tensors of both the keys and values.
-
-<!-- 
-我们在量化的时候会同时量化kv cache，所以在qat的时候也需要考虑到这个部分的量化误差
-注意有人可能会说量化的weight和量化的activation相乘不应该产生的就是量化后的kv吗，这里问题在于kv cache的量化位数可能和w&a不一样
--->
-
-
-## LLM-QAT
 ![w:900](images/5485057c39ea12f68289a080cad46fd421f2d08fea5d816614979b06e6ac9584.png)  
 
 <!-- 
@@ -860,104 +539,6 @@ weight-activation-kvcache
 量化到8bit时ptq效果就不错了
 但是如果需要进一步降低bitwidth，就需要qat
 -->
-
-## EfficientQAT
-LLM-QAT's problem:
-- Extremely resource-demanding: takes ~500 GPU hours to generate the dataset, and ~900 GPU hours to train a 70B model(!)
-
-EfficientQAT: two-stage strategy
-- block-wise training of all parameters (**Block-AP**) 
-- end-to-end training of quantization parameters (**E2E-QP**)
-<!-- footer: Chen et al., [[arxiv]](https://arxiv.org/abs/2407.11062) -->
-
-<!-- 
-QAT 确实有很大的好处，但是在 LLM 上的 qat 需要非常大的资源
-首先生成数据的时候需要用原始精度的 model 来蒸馏
-其次全量微调整个模型也需要很多 gpu hour
-所以去年十月份就有这个来自OpenGV lab 的工作
--->
-<!-- 
-他把 qat 的过程拆成两个部分
-第一步一个 transformer block一个 block 的用 qat
-第二步 end to end的训练所有的量化参数
--->
-
-## EfficientQAT
-- Block-AP: sequentially conducts QAT within one transformer block before moving on to the next under a block-wise reconstruction framework.
-$$
-\begin{align}
-\arg \min_{\Theta_1, \Theta_2} \lvert\lvert \mathcal{F}(\mathbf{W},\mathbf{X}) - \mathcal{F}\big(Q_w(\mathbf{\mathbf{W}}; \Theta_1,\Theta_2),Q_a(\mathbf{X}, \Theta_2)\big) \rvert\rvert
-\end{align}
-$$
-- E2E-QP: begins with $W_q$ initialized via Block-AP and focuses solely on the training of quantization parameters ($s$ and $z$)
-    - Training only $s$ gives similar results as co-training $s$ and $z$.
-
-<!-- 
-block-ap: 利用 reconstruction loss 逐层进行 qat，同理利用 ste 估计round 操作的梯度
-e2e-qp: 训练所有的 quantization param，注意此时不需要用 ste 了，因为所有的参数已经是量化之后的了，所以前向的时候没有量化操作，只有解量化操作
--->
-
-## EfficientQAT
-![w:1000](images/3e3710f1c61e43c301b06d8885cba08b72d97fab7f93e9cc700743646af35f74.png)  
-
-## EfficientQAT
-![bg w:430](images/36cde337c7e77c16e254f094b274fbf5777fc4b3ff4d61998fe8500153898f02.png)  
-![bg w:600](images/44bae524a9c4a855eb727910776d0dad9aeb946d9736f251e05204c8df9f40e4.png)  
-
-## Efficient<span class="morph" style="--morph-name:qat;">QAT</span>
-![w:600](images/d19135c83ebebd85cb3c30509054c2709bdca6ea4a72eb6a8331a08fb583503c.png) 
-
-
-## Findings on <span class="morph" style="--morph-name:qat;">QAT</span> from ParetoQ
-- **Training Budget Allocation**: i.e. Given a fixed training budget (in \#tokens) $\mathcal{B}_{\text{train}} = \mathcal{B}_{\text{FPT}} + \mathcal{B}_{\text{QAT}}$, how should the budget be optimally allocated between full-precision training ($\mathcal{B}_{\text{FPT}}$) and quantization-aware training/fine-tuning ($\mathcal{B}_{\text{QAT}}$)?
-
-| QAT finetuning consistently surpasses both PTQ with $\mathcal{B}_\text{FPT} = \mathcal{B}_\text{train}$ and QAT from scratch with $\mathcal{B}_\text{QAT} = \mathcal{B}_\text{train}$. Optimal performance is nearly achieved by dedicating the majority of the training budget to full precision (FP) training and approximately 10\% to QAT. |
-|:-|
-<!-- footer: Liu et al., [[arxiv]](https://arxiv.org/abs/2502.02631) -->
-
-<!-- 
-9成FP训练+1 成 QAT 最好
--->
-
-
-## Findings on QAT from ParetoQ
-![](images/349a0dde51edeabf24dc07fe2b67a52b208ee0c35d77dd0605c725db98697e9a.png)  
-
-
-## Findings on QAT from ParetoQ
-- Fine-tuning Characteristics
-
-|  While fine-tuning enhances performance across all bit-widths, even binary and ternary, optimal fine-tuning effort inversely correlates with bit-width. For 3-bit and 4-bit weights, fine-tuning adjusts within a nearby grid to mitigate accuracy loss, and requires less finetuning tokens. In contrast, binary and ternary weights break the grid, creating new semantic representations to maintain performance, requiring longer finetuning. |
-|:-|
-
-<!-- 
-从 fp 训练好的微调比 train from scratch 好，这和 1bit era 里的结论不同
-高 bit qweight 和原始 weight 的l1 距离小
-但是低bit 就相反
--->
-
-
-## Findings on QAT from ParetoQ
-![w:1100](images/58883ef809aff76aa02f8c8199a25c08309331e3d7e0b742eb320c37c4251bb9.png)  
-
-
-## Findings on QAT from ParetoQ
-![](images/5cffebb9cd2a51d768216cdb1db7561e1648e8689ddd9b26004679dd24da0080.png)  
-
-
-## Findings on QAT from ParetoQ
-- Quantization Method Choices
-
-|Extreme low-bit quantization is highly sensitive to quantization function selection, with no single optimal function for all bit widths. Learnable range settings outperform statistics-based methods due to their flexibility in optimizing range parameters with respect to the final loss. Ternary and 2-bit quantization favor symmetric levels and balanced range coverage in quantization grid configuration, while imbalance levels with “0” in output levels are more effective for 3 and 4-bit quantization.|
-|:-|
-
-<!-- 
-这个我们之前提到过了
-不同 bitwidth 不同模型favor 的 quantizer 选择不一样
-在 qat 的同时动态的学习量化参数是比较好的
-低 bit 下喜欢关于 0 对称，高 bit下喜欢有0
--->
-
 
 
 ## Bonus: Extremely Low-bit LLMs
@@ -1057,22 +638,8 @@ SVID不是为了完全恢复 weight，而是作为 qat 训练的起点
 -->
 
 
-# Evaluating Quantized <span class="morph" style="--morph-name:llms;">LLMs</span>
-<!-- _class: lead -->
-<!-- footer: Li et al., [[arxiv]](https://arxiv.org/abs/2402.18158) -->
-
-## Evaluating Quantized LLMs
-![bg w:800](images/f1d86fbd6860621bb617d4092ec7e3c0823234618ca4e57f3ecc0b9d9905ab7b.png)  
-
-<!-- 
-估计讲到这里已经超时了
-大概放了一张key findings
-有兴趣可以看这个论文，个人感觉实验做的非常solid
--->
-
-
 # <!-- fit -->Thanks for Watching
-Pingzhi Tang
+Pingzhi (Stanley) Tang
 stanleytang@stu.pku.edu.cn
 <!-- class: lead -->
 <!-- footer: \b -->
