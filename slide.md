@@ -33,7 +33,7 @@ img {
 
 > Quantization is set of techniques to reduce the precision, make the model smaller and training faster in deep learning models. 
 
-[Pingzhi (Stanley) Tang](pingzhitang.cv)
+[Pingzhi (Stanley) Tang](https://pingzhitang.cv)
 stanleytang@stu.pku.edu.cn
 <!-- footer: Huggingface [blog](https://huggingface.co/blog/merve/quantization) -->
 
