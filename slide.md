@@ -67,7 +67,7 @@ li {
 - <span class="morph" style="--morph-name:quant-fund;"><span class="morph" style="--morph-name:quant;">Quantization</span> Fundamentals</span>
     - Classed of quantization: based on targets
     - Quantizer design
-    - Quanization granularity
+    - Quantization granularity
     - Modeling simulated quantization in the backward pass
 - Determining Quantizer Parameters
 - Quantization-Aware Training (QAT)
@@ -153,7 +153,6 @@ Compared to the FP KV cache, the quantized one occupies less storage in device m
 - Uniform quantizer
     - Affine (asymmetric)
     - Scale (symmetric)
-    * Stochastic
 - Nonuniform quantizer
     - NF4, etc.
 ![bg right:50% w:600](https://www.researchgate.net/profile/Biao_Sun3/publication/309083844/figure/download/fig1/AS:416736198316035@1476369060881/a-Mid-rise-uniform-quantization-The-mid-point-value-within-a-cell-is-taken-as-the.png)  
